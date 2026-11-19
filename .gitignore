@@ -1,0 +1,10 @@
+.firecrawl/
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+*.aof
+*.rdb
+data/
+.DS_Store
+.gstack/

@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>redis-cli cheat sheet</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<main>
+<p class="kicker">sat-redis · Reference</p>
+<h1>redis-cli cheat sheet</h1>
+<p class="lede">Every command met so far, with the exact reply real Redis gives. These replies are the answer key sat-redis must match.</p>
+
+<h2>Running the real thing</h2>
+<table>
+<tr><th>Do this</th><th>Command</th></tr>
+<tr><td>Start a throwaway server</td><td><code>redis-server --port 6399 --save ''</code></td></tr>
+<tr><td>Open a client</td><td><code>redis-cli -p 6399</code></td></tr>
+<tr><td>Send raw bytes</td><td><code>printf 'PING\r\n' | nc localhost 6399</code></td></tr>
+<tr><td>See exact bytes back</td><td><code>printf 'PING\r\n' | nc localhost 6399 | od -c</code></td></tr>
+<tr><td>Stop the server</td><td><code>redis-cli -p 6399 SHUTDOWN NOSAVE</code></td></tr>
+</table>
+
+<h2>Commands by job</h2>
+<table>
+<tr><th>Job</th><th>Command</th><th>Reply</th></tr>
+<tr><td>Alive?</td><td><code>PING</code></td><td><code>PONG</code></td></tr>
+<tr><td>Store</td><td><code>SET user:42:name "Ada"</code></td><td><code>OK</code></td></tr>
+<tr><td>Fetch</td><td><code>GET user:42:name</code></td><td><code>"Ada"</code></td></tr>
+<tr><td>Fetch missing</td><td><code>GET nope</code></td><td><code>(nil)</code></td></tr>
+<tr><td>Delete</td><td><code>DEL user:42:name</code></td><td><code>(integer) 1</code> = how many removed</td></tr>
+<tr><td>Cache with timer</td><td><code>SET page:home "..." EX 60</code></td><td><code>OK</code></td></tr>
+<tr><td>Count</td><td><code>INCR rate:ada:1200</code></td><td><code>(integer) 1</code>, then 2, 3 …</td></tr>
+<tr><td>Self-destruct timer</td><td><code>EXPIRE rate:ada:1200 60</code></td><td><code>(integer) 1</code> = timer set</td></tr>
+<tr><td>Seconds left</td><td><code>TTL rate:ada:1200</code></td><td><code>(integer) 57</code></td></tr>
+<tr><td>Leaderboard add</td><td><code>ZADD leaderboard 120 ada 95 bob</code></td><td><code>(integer) 2</code> = new members</td></tr>
+<tr><td>Leaderboard read</td><td><code>ZRANGE leaderboard 0 -1 REV WITHSCORES</code></td><td>members high to low, each followed by its score</td></tr>
+<tr><td>Queue push</td><td><code>LPUSH jobs "email:ada"</code></td><td><code>(integer) 1</code> = new length</td></tr>
+<tr><td>Queue pop</td><td><code>RPOP jobs</code></td><td><code>"email:ada"</code></td></tr>
+<tr><td>Session hash</td><td><code>HSET session:abc user ada cart 3</code></td><td><code>(integer) 2</code> = new fields</td></tr>
+<tr><td>Read hash</td><td><code>HGETALL session:abc</code></td><td>field, value, field, value …</td></tr>
+<tr><td>What kind?</td><td><code>TYPE leaderboard</code></td><td><code>zset</code></td></tr>
+</table>
+
+<h2>The six jobs</h2>
+<table>
+<tr><th>Job</th><th>Redis type</th><th>Key commands</th></tr>
+<tr><td>Cache</td><td>string</td><td><code>SET … EX</code>, <code>GET</code></td></tr>
+<tr><td>Sessions</td><td>hash</td><td><code>HSET</code>, <code>HGETALL</code></td></tr>
+<tr><td>Rate limiter</td><td>string (counter)</td><td><code>INCR</code>, <code>EXPIRE</code></td></tr>
+<tr><td>Leaderboard</td><td>sorted set</td><td><code>ZADD</code>, <code>ZRANGE … REV</code></td></tr>
+<tr><td>Job queue</td><td>list</td><td><code>LPUSH</code>, <code>RPOP</code></td></tr>
+<tr><td>Live messages</td><td>pub/sub channel</td><td><code>PUBLISH</code>, <code>SUBSCRIBE</code></td></tr>
+</table>
+
+<h2>RESP so far</h2>
+<p><code>+PONG\r\n</code>: a <code>+</code> tag means simple string, <code>\r\n</code> ends the line. Full table arrives in lesson 3. <a class="cite" href="https://redis.io/docs/latest/develop/reference/protocol-spec/">[RESP spec]</a></p>
+
+<nav class="course"><a href="../lessons/0001-redis-is-a-shared-dictionary-in-its-own-program.html">← Lesson 1</a><span></span></nav>
+</main>
+</body>
+</html>

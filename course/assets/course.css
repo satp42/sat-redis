@@ -1,0 +1,101 @@
+/* Shared stylesheet for every lesson and reference sheet in this track. */
+:root {
+  --bg: #fffff8; --ink: #151515; --muted: #6b6b63; --rule: #dcdcd0;
+  --accent: #1f4f8f; --good: #2e6b3a; --bad: #a3341f; --card: #f6f6ea;
+  
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #15151a; --ink: #e8e6dc; --muted: #9a988c; --rule: #33333a;
+          --accent: #8fb4ec; --good: #7fc48e; --bad: #e58a6f; --card: #1e1e25;
+          }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 3rem 1.25rem 5rem; background: var(--bg); color: var(--ink);
+  font: 1.15rem/1.6 "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+}
+main { max-width: 38rem; margin: 0 auto; }
+h1 { font-size: 2.2rem; line-height: 1.15; font-weight: 400; margin: 0.3rem 0 0.6rem; }
+h2 { font-size: 1.35rem; font-weight: 400; font-style: italic; margin: 2.6rem 0 0.6rem; }
+p, ul, ol { margin: 0 0 1rem; }
+a { color: inherit; text-decoration-color: var(--accent); text-underline-offset: 0.15em; }
+.kicker { font-variant: small-caps; letter-spacing: 0.06em; color: var(--muted); font-size: 0.95rem; }
+.lede { font-size: 1.3rem; line-height: 1.45; color: var(--muted); }
+.cite { font-size: 0.8rem; color: var(--muted); white-space: nowrap; }
+blockquote { margin: 1.4rem 0; padding-left: 1rem; border-left: 2px solid var(--accent); font-style: italic; }
+blockquote footer { font-style: normal; font-size: 0.85rem; color: var(--muted); margin-top: 0.3rem; }
+.key { margin: 1.6rem 0; padding: 1rem 1.2rem; background: var(--card); border-radius: 4px; font-size: 1.25rem; text-align: center; }
+figure { margin: 1.6rem 0; }
+figure img, figure svg { width: 100%; border-radius: 4px; display: block; }
+figcaption { font-size: 0.85rem; color: var(--muted); margin-top: 0.4rem; }
+table { width: 100%; border-collapse: collapse; margin: 1.2rem 0; font-size: 1rem; }
+th { text-align: left; font-weight: 400; font-variant: small-caps; letter-spacing: 0.05em; color: var(--muted); border-bottom: 1px solid var(--ink); padding: 0.3rem 0.5rem 0.3rem 0; }
+td { border-bottom: 1px solid var(--rule); padding: 0.45rem 0.5rem 0.45rem 0; vertical-align: top; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+details { margin: 1rem 0; padding: 0.7rem 1rem; background: var(--card); border-radius: 4px; }
+summary { cursor: pointer; }
+hr { border: 0; border-top: 1px solid var(--rule); margin: 2.6rem 0; }
+nav.course { display: flex; justify-content: space-between; gap: 1rem; font-size: 0.95rem; margin-top: 2.5rem; }
+code, .mono { font-family: ui-monospace, Menlo, monospace; font-size: 0.88em; }
+pre { background: var(--card); padding: 0.8rem 1rem; border-radius: 4px; overflow-x: auto; font-size: 0.85rem; line-height: 1.45; }
+pre code { font-size: inherit; }
+
+/* Quiz widget (behaviour in quiz.js) */
+.quiz { margin: 1.4rem 0; padding: 1rem 1.2rem; border: 1px solid var(--rule); border-radius: 4px; }
+.quiz .q, .recall .q { margin-bottom: 0.7rem; }
+.recall { margin: 1.4rem 0; padding: 1rem 1.2rem; border: 1px solid var(--rule); border-radius: 4px; }
+.recall textarea {
+  display: block; width: 100%; min-height: 5.5rem; padding: 0.55rem 0.8rem; resize: vertical;
+  font: inherit; font-size: 1rem; color: inherit; background: var(--card);
+  border: 1px solid var(--rule); border-radius: 4px;
+}
+.recall details { margin-bottom: 0; }
+.quiz button {
+  display: block; width: 100%; text-align: left; margin: 0.35rem 0; padding: 0.55rem 0.8rem;
+  font: inherit; font-size: 1rem; color: inherit; background: var(--card);
+  border: 1px solid var(--rule); border-radius: 4px; cursor: pointer;
+}
+.quiz button:hover:not(:disabled) { border-color: var(--ink); }
+.quiz button:disabled { cursor: default; opacity: 0.75; }
+.quiz button.right { border-color: var(--good); color: var(--good); opacity: 1; font-weight: 600; }
+.quiz button.wrong { border-color: var(--bad); color: var(--bad); opacity: 1; text-decoration: line-through; }
+.quiz .why { margin: 0.7rem 0 0; font-size: 0.98rem; color: var(--muted); }
+#score { font-size: 1rem; }
+#score code { display: block; margin-top: 0.4rem; padding: 0.5rem 0.7rem; background: var(--card); border-radius: 4px; user-select: all; font-size: 0.85rem; }
+
+
+
+/* Term cards: every jargon word gets a tiny picture */
+.terms { display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: 0.8rem; margin: 1.4rem 0; }
+.term { padding: 0.8rem 0.9rem; background: var(--card); border-radius: 4px; font-size: 0.98rem; line-height: 1.45; }
+.term svg { width: 100%; height: 5.5rem; display: block; margin-bottom: 0.5rem; }
+.term b { display: block; font-variant: small-caps; letter-spacing: 0.04em; font-weight: 600; margin-bottom: 0.2rem; }
+.term .plain { color: var(--muted); font-style: italic; }
+
+/* Inline SVG palette, so diagrams follow light and dark mode */
+svg text { fill: var(--ink); font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+svg text.s { font-size: 10px; fill: var(--muted); }
+svg text.h { font-family: "Iowan Old Style", Palatino, Georgia, serif; font-size: 14px; }
+svg .box { fill: var(--card); stroke: var(--ink); stroke-width: 1.2; }
+svg .boxa { fill: var(--bg); stroke: var(--accent); stroke-width: 1.6; }
+svg .line { stroke: var(--ink); stroke-width: 1.2; fill: none; }
+svg .acc { stroke: var(--accent); stroke-width: 1.6; fill: none; }
+svg .bad { stroke: var(--bad); stroke-width: 1.6; fill: none; }
+svg .good { stroke: var(--good); stroke-width: 1.6; fill: none; }
+svg .fill-acc { fill: var(--accent); } svg .fill-bad { fill: var(--bad); } svg .fill-good { fill: var(--good); }
+svg .fill-muted { fill: var(--muted); }
+
+/* Terminal blocks: what you type and what comes back */
+pre.term-out { background: #1d1f21; color: #e6e6e6; }
+pre.term-out .p { color: #8fb4ec; } pre.term-out .c { color: #9a988c; }
+.step { margin: 1.4rem 0; padding: 0.9rem 1.1rem; border-left: 3px solid var(--accent); background: var(--card); border-radius: 0 4px 4px 0; }
+.step > b:first-child { font-variant: small-caps; letter-spacing: 0.05em; color: var(--accent); }
+.senior { margin: 1.6rem 0; padding: 0.9rem 1.1rem; border: 1px dashed var(--accent); border-radius: 4px; font-size: 1rem; }
+.senior::before { content: "How a senior engineer thinks about it"; display: block; font-variant: small-caps; letter-spacing: 0.05em; color: var(--accent); margin-bottom: 0.3rem; }
+.ask { margin: 2rem 0 1rem; padding: 0.8rem 1rem; background: var(--card); border-radius: 4px; font-size: 1rem; }
+
+@media print {
+  body { padding: 0; font-size: 11pt; background: #fff; color: #000; }
+  .quiz button, .widget { break-inside: avoid; }
+  nav.course { display: none; }
+}
