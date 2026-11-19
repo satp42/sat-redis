@@ -3,7 +3,7 @@
 ## Workspace layout
 - Repo root `~/Desktop/sat-redis/` is the *project*: README, the Python package the learner writes, tests.
 - `course/` is the /teach workspace (this folder). Run /teach from here.
-- Scraped sources live in `../.firecrawl/pages/` (gitignored, not republished) and in the Obsidian vault at `raw/redis-from-scratch/`, compiled into the wiki.
+- Scraped sources live in `../.firecrawl/pages/` (gitignored, not republished) and in a private notes vault, compiled into a personal wiki.
 
 ## Learner preferences
 - Knows Python. No Rust. No Redis. Assume nothing about networking or storage either.

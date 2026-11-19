@@ -11,7 +11,7 @@ Understand how a real database server works by writing one: sat-redis, a Redis c
 - Where profiling proves Python is the bottleneck, one hot path is moved to Rust with PyO3, and the speedup is measured.
 
 ## Constraints
-- Python, which Satwik knows. Zero Rust and zero Redis knowledge at the start.
+- Python, which the learner already knows. Zero Rust and zero Redis knowledge at the start.
 - Started from scratch: no idea what Redis is. Lessons must be ELI5 and visual first.
 - Hand-written code in Cursor. The teacher gives specs, tests, hints, and reviews, not finished implementations.
 - Public repo on GitHub: `sat-redis`.
