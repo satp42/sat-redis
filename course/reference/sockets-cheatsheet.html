@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sockets cheat sheet</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<main>
+<p class="kicker">sat-redis · Reference</p>
+<h1>Sockets cheat sheet</h1>
+<p class="lede">The socket calls sat-redis uses, what each one means in the phone-call picture, and the traps the docs warn about.</p>
+
+<h2>Server side, in order</h2>
+<table>
+<tr><th>Call</th><th>Phone picture</th><th>Notes</th></tr>
+<tr><td><code>socket.socket(AF_INET, SOCK_STREAM)</code></td><td>Get a handset</td><td>IPv4 + TCP</td></tr>
+<tr><td><code>s.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)</code></td><td>Allow reusing a door that was just closed</td><td>Before <code>bind</code>. Skips the <code>TIME_WAIT</code> "Address already in use" wait.</td></tr>
+<tr><td><code>s.bind(("127.0.0.1", 6380))</code></td><td>Claim a door</td><td>Port <code>0</code> = let the OS pick a free one (tests do this)</td></tr>
+<tr><td><code>s.listen()</code></td><td>Become the receptionist</td><td>Waiting callers queue up</td></tr>
+<tr><td><code>conn, addr = s.accept()</code></td><td>Pick up the next call</td><td>Blocks. Returns a <em>new</em> socket for that caller.</td></tr>
+<tr><td><code>conn.recv(1024)</code></td><td>Listen</td><td>Up to 1024 bytes, maybe fewer. <code>b""</code> = hung up.</td></tr>
+<tr><td><code>conn.sendall(data)</code></td><td>Speak all of it</td><td>Loops until every byte is sent. Plain <code>send</code> may stop early.</td></tr>
+<tr><td><code>conn.close()</code> or <code>with conn:</code></td><td>Hang up</td><td><code>with</code> closes even if an error is raised</td></tr>
+<tr><td><code>s.getsockname()</code></td><td>Read your own door number</td><td>Returns <code>(host, port)</code></td></tr>
+</table>
+
+<h2>Client side</h2>
+<table>
+<tr><th>Call</th><th>Notes</th></tr>
+<tr><td><code>socket.create_connection(("127.0.0.1", 6380), timeout=2)</code></td><td>Dial and connect in one step</td></tr>
+<tr><td><code>nc localhost 6380</code></td><td>Type lines by hand, see the raw reply</td></tr>
+<tr><td><code>printf 'PING\r\n' | nc -w1 localhost 6380 | od -c</code></td><td>See every byte, including <code>\r</code> and <code>\n</code></td></tr>
+<tr><td><code>lsof -i :6380</code></td><td>Who is holding this port? (find a server you forgot to stop)</td></tr>
+</table>
+
+<h2>Errors you will meet</h2>
+<table>
+<tr><th>Error</th><th>Meaning</th><th>What to do</th></tr>
+<tr><td><code>OSError: [Errno 48] Address already in use</code></td><td>Something already holds that port, or <code>SO_REUSEADDR</code> was not set</td><td><code>lsof -i :6380</code>, stop it, check the flag</td></tr>
+<tr><td><code>ConnectionRefusedError</code></td><td>Nobody is listening at that door</td><td>Start the server first</td></tr>
+<tr><td><code>ConnectionResetError</code></td><td>The caller slammed the phone (crashed or reset)</td><td>End that one conversation, keep serving</td></tr>
+<tr><td><code>BrokenPipeError</code></td><td>You spoke after the caller already left</td><td>Same: end that conversation</td></tr>
+</table>
+<p>Both of the last two are subclasses of <code>ConnectionError</code>.</p>
+
+<h2>The three truths</h2>
+<p>1. TCP is a hose, not envelopes: order is kept, message boundaries are not. 2. <code>recv(n)</code> and <code>send</code> may handle fewer bytes than you asked. 3. <code>recv</code> returning <code>b""</code> means the other side closed, forever. <a class="cite" href="https://docs.python.org/3/howto/sockets.html#using-a-socket">[Python Socket HOWTO]</a></p>
+
+<nav class="course"><a href="../lessons/0002-a-server-is-a-loop-that-answers-the-phone.html">← Lesson 2</a><span></span></nav>
+</main>
+</body>
+</html>

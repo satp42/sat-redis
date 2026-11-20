@@ -18,7 +18,7 @@
 
 ## Planned arc (adjust to evidence)
 1. What Redis is, use cases, play with the real one  ← lesson 0001
-2. Sockets: an echo server with the stdlib, poked with `nc`
+2. Sockets: an echo server with the stdlib, poked with `nc`  ← lesson 0002 (shipped 2026-11-19, spec tests/test_echo.py, 7 pass + 1 xfail when done)
 3. RESP: TCP is a stream, so framing; a parser tested on partial reads
 4. Commands: PING/ECHO/SET/GET, real redis-cli connects (milestone)
 5. Many clients: threads vs the event loop, asyncio (Tokio's model, translated)
@@ -32,3 +32,6 @@
 13. Benchmark + profile: redis-benchmark, py-spy, pipelining, uvloop
 14. Multi-core + Rust: processes with SO_REUSEPORT, PyO3 hot path
 15. Production polish: graceful shutdown, config, logging, packaging
+
+## Progress
+- 2026-11-19: learner reports lesson 0001 done. Score line not pasted yet. Lesson 0002 shipped.

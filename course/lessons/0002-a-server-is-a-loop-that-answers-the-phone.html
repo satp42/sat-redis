@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 2: A server is a loop that answers the phone</title>
+<link rel="stylesheet" href="../assets/course.css">
+<script src="../assets/quiz.js" defer></script>
+</head>
+<body>
+<main>
+
+<p class="kicker">sat-redis · Part II Talking over the network · Lesson 2 of about 15</p>
+<h1>A server is a loop that answers the phone</h1>
+<p class="lede">Your win today: the first real piece of sat-redis. You write an echo server with nothing but Python's standard library, turn 7 tests green, and watch the real <code>redis-cli</code> connect to it.</p>
+
+<h2>Predict first</h2>
+
+<div class="quiz" data-answer="2">
+<p class="q">1. A client sends 1,000,000 bytes in one go. Your server calls <code>recv(1024)</code> once. What does that one call give you?</p>
+<button>All 1,000,000 bytes at once</button>
+<button>An error, the data is too big</button>
+<button>At most 1,024 bytes, maybe fewer</button>
+<button>Exactly the first line of text</button>
+<p class="why" hidden>The number you pass to <code>recv</code> is a maximum, not a promise. You get whatever has arrived, up to that many bytes, and you call it again for the rest.</p>
+</div>
+
+<div class="quiz" data-answer="0">
+<p class="q">2. Your server is busy talking to client A. Client B connects. With the simple loop you build today, what happens to B?</p>
+<button>B waits until A hangs up</button>
+<button>B is refused straight away</button>
+<button>A is dropped to serve B</button>
+<button>Both are served at once</button>
+<p class="why" hidden>The operating system lets B connect and parks it in a queue, but your code only picks up the next call when it finishes the current one. B sits on hold. You will prove this today and fix it in lesson 5.</p>
+</div>
+
+<h2>Where we are</h2>
+
+<figure>
+<svg viewBox="0 0 560 200" role="img" aria-label="The sat-redis layers with layer 1, Network, highlighted as today's work.">
+  <rect x="20" y="10" width="380" height="38" rx="4" class="box"/><text x="34" y="34" class="h">4 · The dictionary</text>
+  <rect x="20" y="56" width="380" height="38" rx="4" class="box"/><text x="34" y="80" class="h">3 · Commands</text>
+  <rect x="20" y="102" width="380" height="38" rx="4" class="box"/><text x="34" y="126" class="h">2 · Protocol (RESP)</text>
+  <rect x="20" y="148" width="380" height="38" rx="4" class="boxa" style="stroke-width:2.5"/><text x="34" y="172" class="h">1 · Network</text>
+  <text x="420" y="172" class="fill-acc" style="fill:var(--accent)">← today</text>
+  <text x="420" y="126" class="s">lesson 3</text>
+  <text x="420" y="80" class="s">lesson 4</text>
+</svg>
+<figcaption>Today is the ground floor: accept a connection, read bytes, write bytes. No Redis yet, just plumbing that works.</figcaption>
+</figure>
+
+<h2>The phone call picture</h2>
+
+<p>Two programs talking over a network work almost exactly like a phone call to a big office. Hold this picture and every socket call has an obvious meaning.</p>
+
+<figure>
+<svg viewBox="0 0 560 230" role="img" aria-label="A client phones an office. A receptionist at the listening socket answers and hands the caller to a private line, then goes back to waiting.">
+  <rect x="10" y="80" width="90" height="60" rx="6" class="box"/><text x="55" y="106" text-anchor="middle" class="h">client</text><text x="55" y="124" text-anchor="middle" class="s">nc, redis-cli</text>
+  <rect x="200" y="20" width="150" height="56" rx="6" class="boxa"/><text x="275" y="44" text-anchor="middle" class="h">receptionist</text><text x="275" y="62" text-anchor="middle" class="s">listening socket</text>
+  <rect x="200" y="150" width="150" height="56" rx="6" class="box"/><text x="275" y="174" text-anchor="middle" class="h">private line</text><text x="275" y="192" text-anchor="middle" class="s">connection socket</text>
+  <path d="M102 100 L198 52" class="acc"/><text x="10" y="44" class="s">1. dial 127.0.0.1:6380</text>
+  <path d="M275 78 L275 148" class="line" stroke-dasharray="4 3"/><text x="282" y="118" class="s">2. accept(): hand over</text>
+  <path d="M102 122 L198 176" class="good"/><text x="10" y="196" class="s">3. talk: recv / sendall</text>
+  <text x="370" y="44" class="s">only answers calls,</text><text x="370" y="58" class="s">never chats</text>
+  <text x="370" y="174" class="s">one per caller,</text><text x="370" y="188" class="s">all the chatting</text>
+</svg>
+<figcaption>The receptionist never talks business. It answers, creates a private line for the caller, and goes straight back to waiting. The Python docs put it the same way: a server socket "doesn't send any data. It doesn't receive any data. It just produces 'client' sockets." <a class="cite" href="https://docs.python.org/3/howto/sockets.html">[Python Socket HOWTO]</a></figcaption>
+</figure>
+
+<div class="terms">
+<div class="term">
+<svg viewBox="0 0 200 80"><rect x="20" y="15" width="160" height="50" rx="6" class="box"/><text x="100" y="38" text-anchor="middle">127.0.0.1</text><text x="100" y="56" text-anchor="middle" class="s">"this same computer"</text></svg>
+<b>IP address, localhost</b>
+<span class="plain">The street address of a computer.</span> <code>127.0.0.1</code>, also called <code>localhost</code>, always means "the machine I am on", so your client and server can both run on your laptop.
+</div>
+<div class="term">
+<svg viewBox="0 0 200 80"><rect x="20" y="10" width="160" height="60" rx="6" class="box"/><rect x="40" y="36" width="34" height="24" rx="2" class="box"/><text x="57" y="52" text-anchor="middle" class="s">6379</text><rect x="84" y="36" width="34" height="24" rx="2" class="boxa"/><text x="101" y="52" text-anchor="middle" class="s">6380</text><rect x="128" y="36" width="34" height="24" rx="2" class="box"/><text x="145" y="52" text-anchor="middle" class="s">…</text><text x="100" y="28" text-anchor="middle" class="s">doors on 127.0.0.1</text></svg>
+<b>Port</b>
+<span class="plain">The door number on that address.</span> Real Redis uses 6379. sat-redis will use <code>6380</code> so both can run side by side for comparison.
+</div>
+<div class="term">
+<svg viewBox="0 0 200 80"><path d="M40 55 Q40 25 70 25 L130 25 Q160 25 160 55" class="acc" stroke-width="5"/><rect x="25" y="50" width="34" height="18" rx="5" class="boxa"/><rect x="141" y="50" width="34" height="18" rx="5" class="boxa"/></svg>
+<b>Socket</b>
+<span class="plain">The phone handset your program holds.</span> A Python object you read bytes from and write bytes to. Each end of a conversation has its own.
+</div>
+<div class="term">
+<svg viewBox="0 0 200 80"><rect x="10" y="20" width="80" height="40" rx="4" class="boxa"/><text x="50" y="44" text-anchor="middle" class="s">bind</text><path d="M92 40 L112 40" class="line"/><rect x="112" y="20" width="80" height="40" rx="4" class="boxa"/><text x="152" y="44" text-anchor="middle" class="s">listen</text></svg>
+<b>bind, then listen</b>
+<span class="plain">Claim a door, then start answering it.</span> <code>bind((host, port))</code> attaches the socket to an address. <code>listen()</code> turns it into a receptionist with a small waiting queue.
+</div>
+<div class="term">
+<svg viewBox="0 0 200 80"><rect x="10" y="25" width="70" height="30" rx="4" class="boxa"/><text x="45" y="44" text-anchor="middle" class="s">accept()</text><path d="M82 40 L118 40" class="acc"/><path d="M112 35 L118 40 L112 45" class="acc"/><rect x="120" y="25" width="70" height="30" rx="4" class="box"/><text x="155" y="44" text-anchor="middle" class="s">conn, addr</text></svg>
+<b>accept</b>
+<span class="plain">Pick up the next ringing call.</span> It waits (blocks) until someone connects, then returns a brand-new socket just for that caller, plus the caller's address.
+</div>
+<div class="term">
+<svg viewBox="0 0 200 80"><rect x="10" y="22" width="80" height="36" rx="4" class="box"/><text x="50" y="44" text-anchor="middle" class="s">recv(1024)</text><rect x="110" y="22" width="80" height="36" rx="4" class="box"/><text x="150" y="44" text-anchor="middle" class="s">sendall(b)</text></svg>
+<b>recv and sendall</b>
+<span class="plain">Listen and speak.</span> <code>recv(n)</code> returns up to <code>n</code> bytes that have arrived. <code>sendall(data)</code> keeps sending until every byte has gone, unlike plain <code>send</code>, which may stop early. <a class="cite" href="https://docs.python.org/3/library/socket.html#socket.socket.sendall">[socket docs]</a>
+</div>
+<div class="term">
+<svg viewBox="0 0 200 80"><rect x="60" y="20" width="80" height="40" rx="4" class="box"/><text x="100" y="45" text-anchor="middle">b""</text><text x="100" y="75" text-anchor="middle" class="s">empty bytes = hung up</text></svg>
+<b>Hang-up: recv returns b""</b>
+<span class="plain">Silence that means goodbye.</span> "When a recv returns 0 bytes, it means the other side has closed … You will not receive any more data on this connection. Ever." <a class="cite" href="https://docs.python.org/3/howto/sockets.html#using-a-socket">[HOWTO]</a>
+</div>
+<div class="term">
+<svg viewBox="0 0 200 80"><rect x="60" y="15" width="80" height="50" rx="4" class="box"/><path d="M60 15 L140 65 M140 15 L60 65" class="bad"/><text x="100" y="77" text-anchor="middle" class="s">ConnectionResetError</text></svg>
+<b>Reset: the slammed phone</b>
+<span class="plain">The caller vanished mid-sentence.</span> A crashed client does not say goodbye. Your next <code>recv</code> or <code>sendall</code> raises <code>ConnectionResetError</code>. A server must shrug that off and take the next call.
+</div>
+</div>
+
+<h2>The whole conversation, in order</h2>
+
+<figure>
+<svg viewBox="0 0 560 300" role="img" aria-label="Timeline: server calls socket, bind, listen, accept; client calls connect; then they exchange bytes; client closes; server's recv returns empty bytes; server goes back to accept.">
+  <text x="140" y="20" text-anchor="middle" class="h">your server</text>
+  <text x="430" y="20" text-anchor="middle" class="h">client (nc)</text>
+  <path d="M140 30 L140 290" class="line" stroke-dasharray="2 4"/><path d="M430 30 L430 290" class="line" stroke-dasharray="2 4"/>
+  <rect x="54" y="36" width="172" height="22" rx="3" class="box"/><text x="140" y="51" text-anchor="middle" class="s">socket() + setsockopt</text>
+  <rect x="54" y="64" width="172" height="22" rx="3" class="box"/><text x="140" y="79" text-anchor="middle" class="s">bind(("127.0.0.1", 6380))</text>
+  <rect x="54" y="92" width="172" height="22" rx="3" class="box"/><text x="140" y="107" text-anchor="middle" class="s">listen()</text>
+  <rect x="54" y="120" width="172" height="22" rx="3" class="boxa"/><text x="140" y="135" text-anchor="middle" class="s">accept()  … waits …</text>
+  <rect x="370" y="120" width="120" height="22" rx="3" class="box"/><text x="430" y="135" text-anchor="middle" class="s">connect</text>
+  <path d="M368 131 L228 131" class="acc"/>
+  <path d="M368 166 L228 166" class="acc"/><text x="290" y="160" text-anchor="middle" class="s">b"hello"</text>
+  <rect x="54" y="156" width="172" height="22" rx="3" class="box"/><text x="140" y="171" text-anchor="middle" class="s">recv → b"hello"</text>
+  <rect x="54" y="186" width="172" height="22" rx="3" class="box"/><text x="140" y="201" text-anchor="middle" class="s">sendall(b"hello")</text>
+  <path d="M228 197 L368 197" class="good"/><text x="290" y="191" text-anchor="middle" class="s">b"hello"</text>
+  <rect x="370" y="216" width="120" height="22" rx="3" class="box"/><text x="430" y="231" text-anchor="middle" class="s">close (Ctrl+C)</text>
+  <rect x="54" y="216" width="172" height="22" rx="3" class="box"/><text x="140" y="231" text-anchor="middle" class="s">recv → b""  (hung up)</text>
+  <rect x="54" y="250" width="172" height="22" rx="3" class="boxa"/><text x="140" y="265" text-anchor="middle" class="s">close, back to accept()</text>
+  <path d="M50 261 Q18 196 50 131" class="acc"/><text x="4" y="124" class="s">loop</text>
+</svg>
+<figcaption>The entire server is two nested loops: an outer loop that answers calls, and an inner loop that echoes until the caller hangs up.</figcaption>
+</figure>
+
+<h2>The one idea that bites everyone: TCP is a hose, not envelopes</h2>
+
+<p>When the client sends <code>"PING"</code> and then <code>"SET k v"</code>, you might picture two envelopes arriving. That is not what happens. TCP, the protocol underneath every socket here, delivers one continuous <strong>stream of bytes</strong>, like water through a hose. The boundaries between the client's sends are not kept.</p>
+
+<figure>
+<svg viewBox="0 0 560 170" role="img" aria-label="Two sends, PING and SET k v, arrive as one stream of bytes and can be split by recv calls at any point.">
+  <text x="10" y="22" class="s">client sends twice:</text>
+  <rect x="140" y="8" width="90" height="24" rx="3" class="boxa"/><text x="185" y="25" text-anchor="middle">PING\r\n</text>
+  <rect x="240" y="8" width="110" height="24" rx="3" class="boxa"/><text x="295" y="25" text-anchor="middle">SET k v\r\n</text>
+  <text x="10" y="72" class="s">the wire carries:</text>
+  <rect x="140" y="56" width="400" height="26" rx="13" class="box"/>
+  <text x="150" y="74">P I N G \r \n S E T   k   v \r \n</text>
+  <text x="10" y="124" class="s">your recv calls</text><text x="10" y="138" class="s">might get:</text>
+  <rect x="140" y="110" width="70" height="24" rx="3" class="box"/><text x="175" y="127" text-anchor="middle">PIN</text>
+  <rect x="216" y="110" width="140" height="24" rx="3" class="box"/><text x="286" y="127" text-anchor="middle">G\r\nSET k</text>
+  <rect x="362" y="110" width="70" height="24" rx="3" class="box"/><text x="397" y="127" text-anchor="middle"> v\r\n</text>
+  <text x="140" y="160" class="s">Any split is legal. Order kept, nothing lost or duplicated.</text>
+</svg>
+<figcaption>Order is guaranteed. Chunk boundaries are not. The HOWTO calls this "the major stumbling block of sockets": <code>send</code> and <code>recv</code> "do not necessarily handle all the bytes you hand them". <a class="cite" href="https://docs.python.org/3/howto/sockets.html#using-a-socket">[HOWTO]</a></figcaption>
+</figure>
+
+<p>For an echo server this does not matter yet, because you send back whatever chunk you got and the bytes stay in order. In lesson 3 it becomes <em>the</em> problem: to understand a Redis command you have to find where one command ends and the next begins. Notice it now so it is not a surprise then.</p>
+
+<h2>Set up the project in Cursor</h2>
+
+<p>Do this yourself, typing each command. Setting up a project is part of the skill.</p>
+
+<div class="step"><b>Step 0.</b> Open the integrated terminal (<code>Ctrl+`</code>) in your <code>sat-redis</code> workspace. If you have not already, turn off Cursor Tab autocomplete for this project (Cursor Settings → Tab). The point is that the code is yours.</div>
+
+<div class="step"><b>Step 1.</b> Create a bare Python project and add the test runner:
+<pre class="term-out"><span class="p">$</span> uv init --bare --name sat-redis
+<span class="p">$</span> uv add --dev pytest
+<span class="p">$</span> mkdir sat_redis
+<span class="p">$</span> touch sat_redis/__init__.py</pre>
+<code>uv</code> is a fast tool that manages Python projects and their libraries. <code>--bare</code> means "just give me a <code>pyproject.toml</code>, nothing else". <code>pytest</code> runs tests. It is the only library we add, and only for testing. The server itself will use nothing but the standard library.</div>
+
+<div class="step"><b>Step 2.</b> Open <code>pyproject.toml</code> and add these two lines at the bottom, so tests can find your <code>sat_redis</code> folder:
+<pre>[tool.pytest.ini_options]
+pythonpath = ["."]</pre></div>
+
+<div class="step"><b>Step 3.</b> The tests are already in your repo at <code>tests/test_echo.py</code>. They are the spec. Run them now, before writing any code:
+<pre class="term-out"><span class="p">$</span> uv run pytest -v
+<span class="c">E   ModuleNotFoundError: No module named 'sat_redis.server'</span></pre>
+Red is the correct starting colour. You now have a target.</div>
+
+<h2>The spec</h2>
+
+<p>Create <code>sat_redis/server.py</code> with exactly these pieces:</p>
+
+<table>
+<tr><th>Piece</th><th>What it must do</th></tr>
+<tr><td><code>make_server(host, port)</code></td><td>Create a TCP socket, turn on <code>SO_REUSEADDR</code>, bind it, start listening, and <strong>return</strong> it. Do not accept anything here.</td></tr>
+<tr><td><code>serve_forever(server)</code></td><td>Loop forever: accept a client, echo everything it sends until it hangs up, close it, accept the next one. A client that vanishes rudely must not stop the loop.</td></tr>
+<tr><td><code>if __name__ == "__main__":</code></td><td>Run <code>serve_forever(make_server("127.0.0.1", 6380))</code>, so <code>uv run python -m sat_redis.server</code> starts it.</td></tr>
+</table>
+
+<p>And here is what each test is really checking:</p>
+
+<table>
+<tr><th>Test</th><th>The lesson inside it</th></tr>
+<tr><td><code>make_server_returns_a_listening_socket</code></td><td>Setup is separate from serving. That split is what makes the server testable.</td></tr>
+<tr><td><code>echoes_one_message</code></td><td>The basic loop works.</td></tr>
+<tr><td><code>echoes_many_messages_on_one_connection</code></td><td>The inner loop keeps going until hang-up, not after one message.</td></tr>
+<tr><td><code>bytes_come_back_untouched</code></td><td>Bytes are bytes. No <code>.decode()</code>, no stripping <code>\r\n</code>, no text tricks.</td></tr>
+<tr><td><code>echoes_a_payload_bigger_than_one_recv</code></td><td>The hose: 1 MiB arrives in many chunks, and every one must come back.</td></tr>
+<tr><td><code>serves_the_next_client_after_one_hangs_up</code></td><td>The outer loop: after <code>b""</code>, close and accept again.</td></tr>
+<tr><td><code>survives_a_client_that_vanishes_abruptly</code></td><td>One crashing client must not take the server down for everyone else.</td></tr>
+<tr><td><code>two_clients_at_the_same_time</code> <span class="cite">xfail</span></td><td>Marked "expected to fail". It documents today's known limit. When lesson 5 fixes it, pytest will tell you to remove the mark.</td></tr>
+</table>
+
+<h2>Build it in three steps</h2>
+<p>Run only the tests for the step you are on with <code>-k</code>. Try each step before opening a hint. Open hints one rung at a time.</p>
+
+<div class="step"><b>Step A: <code>make_server</code>.</b> Goal: <code>uv run pytest -v -k make_server</code> goes green.
+<details><summary>Hint 1: which calls</summary><code>socket.socket(socket.AF_INET, socket.SOCK_STREAM)</code> makes a TCP socket (<code>AF_INET</code> = IPv4 addresses, <code>SOCK_STREAM</code> = TCP). Then <code>setsockopt</code>, <code>bind</code>, <code>listen</code>, in that order.</details>
+<details><summary>Hint 2: what SO_REUSEADDR is for</summary>After your server stops, the operating system keeps its old address reserved for a short while (a state called <code>TIME_WAIT</code>), so restarting immediately fails with "Address already in use". The flag "tells the kernel to reuse a local socket in <code>TIME_WAIT</code> state, without waiting for its natural timeout to expire". <a class="cite" href="https://docs.python.org/3/library/socket.html#example">[socket docs]</a> It must be set <em>before</em> <code>bind</code>: <code>s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)</code>.</details>
+</div>
+
+<div class="step"><b>Step B: <code>serve_forever</code>.</b> Goal: the five echo tests go green: <code>uv run pytest -v -k "echo or next_client"</code>.
+<details><summary>Hint 1: the shape</summary>Two loops. The outer one calls <code>accept()</code>. The inner one calls <code>recv</code> and <code>sendall</code> until <code>recv</code> returns empty bytes. Consider putting the inner loop in its own function, say <code>handle(conn)</code>.</details>
+<details><summary>Hint 2: pseudocode</summary>
+<pre>forever:
+    conn, address = accept a call
+    with conn:                      # closes it for you when the block ends
+        repeat:
+            data = up to 1024 bytes from conn
+            if data is empty: stop  # they hung up
+            send all of data back on conn</pre>
+Python's walrus operator <code>while data := conn.recv(1024):</code> collapses the inner loop to two lines, if you like it.</details>
+</div>
+
+<div class="step"><b>Step C: survive rude clients.</b> Goal: <code>uv run pytest -v</code> shows <code>7 passed, 1 xfailed</code>.
+<details><summary>Hint 1: what is going wrong</summary>Run the test and read the warning pytest prints. The server thread died with <code>ConnectionResetError</code> while handling the rude client, so nobody was left to answer the next one.</details>
+<details><summary>Hint 2: where to catch it</summary>Catch the error around the handling of <em>one</em> client, inside the outer loop, so only that conversation ends. <code>ConnectionResetError</code> and <code>BrokenPipeError</code> are both subclasses of <code>ConnectionError</code>, so catching that one name covers both kinds of slammed phone. Do not catch every exception: a real bug in your code should still crash loudly.</details>
+</div>
+
+<h2>Try it live</h2>
+
+<div class="step"><b>Talk to it with nc.</b> In one terminal tab:
+<pre class="term-out"><span class="p">$</span> uv run python -m sat_redis.server</pre>
+In a second tab, type lines and watch them come back:
+<pre class="term-out"><span class="p">$</span> nc localhost 6380
+hello
+hello</pre></div>
+
+<div class="step"><b>See the limit with your own eyes.</b> Leave that <code>nc</code> open and start a <em>third</em> tab with another <code>nc localhost 6380</code>. Type into it. Nothing comes back. Now quit the first <code>nc</code> with <code>Ctrl+C</code>. The third tab's text suddenly echoes. That is the "on hold" behaviour from prediction 2, and it is exactly what the xfail test records.</div>
+
+<div class="step"><b>Your win: real redis-cli is already talking to you.</b> With the server running:
+<pre class="term-out"><span class="p">$</span> redis-cli -p 6380
+<span class="p">127.0.0.1:6380&gt;</span> PING
+1) "PING"
+<span class="p">127.0.0.1:6380&gt;</span> SET user:42 Ada
+1) "SET"
+2) "user:42"
+3) "Ada"</pre>
+Why does that work? <code>redis-cli</code> sends your command as RESP bytes (an array of strings). Your server sends the same bytes straight back, which happens to be a perfectly valid RESP reply: an array containing your own words. So <code>redis-cli</code> prints them. It is a parrot, but it speaks Redis's language. Lesson 3 teaches you to <em>read</em> those bytes, and lesson 4 to answer properly.</div>
+
+<div class="step"><b>Commit, like a professional.</b> A green test suite is a checkpoint:
+<pre class="term-out"><span class="p">$</span> git add pyproject.toml uv.lock sat_redis
+<span class="p">$</span> git commit -m "Echo server: stdlib sockets, 7 tests green"
+<span class="p">$</span> git push</pre></div>
+
+<div class="senior">
+Three habits are hiding in this lesson. First, <strong>split setup from the loop</strong> (<code>make_server</code> vs <code>serve_forever</code>), so tests can start a server on port 0, which means "OS, pick any free port". Tests then never clash with each other or with a server you left running. Second, <strong>test the failure paths, not just the happy one</strong>: the rude client and the huge payload are what break real servers, and they cost three lines each to test. Third, <strong>write the known limitation down as a test</strong> (the xfail) instead of a mental note. Future you gets told the day it is fixed.
+</div>
+
+<h2>Check yourself</h2>
+
+<div class="quiz" data-answer="1">
+<p class="q">3. What does a listening socket do all day?</p>
+<button>It echoes bytes to every client</button>
+<button>It only hands out new connections</button>
+<button>It stores the data for clients</button>
+<button>It decides which commands are valid</button>
+<p class="why" hidden>The receptionist only answers and hands each caller a private line (<code>accept</code> returns a new socket). All reading and writing happens on those private lines.</p>
+</div>
+
+<div class="quiz" data-answer="3">
+<p class="q">4. Your inner loop's <code>recv</code> returns <code>b""</code>. What does that mean?</p>
+<button>The client is thinking, wait</button>
+<button>The network dropped one packet</button>
+<button>Your buffer of 1024 is full</button>
+<button>The client hung up for good</button>
+<p class="why" hidden>Empty bytes is TCP's goodbye. Nothing more will ever arrive on that connection, so close it and go back to <code>accept</code>.</p>
+</div>
+
+<div class="quiz" data-answer="0">
+<p class="q">5. Why use <code>sendall</code> instead of <code>send</code>?</p>
+<button>send may stop partway through</button>
+<button>sendall encrypts the bytes first</button>
+<button>send only works for short text</button>
+<button>sendall waits for a reply back</button>
+<p class="why" hidden>Like <code>recv</code>, plain <code>send</code> may handle only part of what you give it and tell you how much. <code>sendall</code> loops for you "until either all data has been sent or an error occurs". <a class="cite" href="https://docs.python.org/3/library/socket.html#socket.socket.sendall">[socket docs]</a></p>
+</div>
+
+<div class="quiz" data-answer="2">
+<p class="q">6. A client sends <code>PING\r\n</code> then <code>SET k v\r\n</code>. Which <code>recv</code> results are possible?</p>
+<button>Only PING, then only SET k v</button>
+<button>Any order, bytes may be shuffled</button>
+<button>Any split, bytes always in order</button>
+<button>Only both together in one chunk</button>
+<p class="why" hidden>TCP is a hose: it keeps the order and never loses bytes, but it does not remember where one send ended. Lesson 3 is about putting the envelopes back.</p>
+</div>
+
+<div class="recall">
+<p class="q">7. Without scrolling up: explain the two loops in your server, and what event ends each one.</p>
+<textarea placeholder="Type your answer, then open the model answer."></textarea>
+<details><summary>Model answer</summary>The outer loop waits in <code>accept()</code> for the next client and never ends while the server runs. The inner loop reads with <code>recv</code> and writes everything back with <code>sendall</code>. It ends when <code>recv</code> returns <code>b""</code> (the client hung up) or when the connection is reset (the client vanished). Then the server closes that connection and the outer loop accepts the next one.</details>
+</div>
+
+<p id="score"></p>
+
+<hr>
+
+<h2>Read next</h2>
+<p><strong>Primary source:</strong> Gordon McMillan, <a href="https://docs.python.org/3/howto/sockets.html">Socket Programming HOWTO</a> in the official Python docs. Read "Creating a Socket" and "Using a Socket", about 10 minutes. Once your tests are green, compare your code with the tiny echo server in the <a href="https://docs.python.org/3/library/socket.html#example">socket module's examples</a>, and notice what yours does that theirs does not.</p>
+
+<p>Keep the <a href="../reference/sockets-cheatsheet.html">sockets cheat sheet</a> open while you code.</p>
+
+<div class="ask">Stuck on a red test? Paste the pytest output to me (Claude) and I will give you the next hint rung, not the answer. When you are green, say so and I will run your tests and review <code>server.py</code> the way a senior engineer reviews a pull request. Paste the score line from the quiz too.</div>
+
+<nav class="course"><a href="0001-redis-is-a-shared-dictionary-in-its-own-program.html">← Lesson 1: what Redis is</a><span>Next: reading RESP (lesson 3)</span></nav>
+
+</main>
+</body>
+</html>
