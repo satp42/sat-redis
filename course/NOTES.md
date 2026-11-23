@@ -19,7 +19,7 @@
 ## Planned arc (adjust to evidence)
 1. What Redis is, use cases, play with the real one  ← lesson 0001
 2. Sockets: an echo server with the stdlib, poked with `nc`  ← lesson 0002 (shipped 2026-11-19, spec tests/test_echo.py, 7 pass + 1 xfail when done)
-3. RESP: TCP is a stream, so framing; a parser tested on partial reads
+3. RESP: TCP is a stream, so framing; a parser tested on partial reads  ← lesson 0003 (shipped 2026-11-23, spec tests/test_resp.py, pure parse/encode, done = 30 passed + 1 xfail)
 4. Commands: PING/ECHO/SET/GET, real redis-cli connects (milestone)
 5. Many clients: threads vs the event loop, asyncio (Tokio's model, translated)
 6. Expiry: lazy + active
@@ -36,3 +36,4 @@
 ## Progress
 - 2026-11-19: learner reports lesson 0001 done. Score line not pasted yet. Lesson 0002 shipped.
 - 2026-11-20: lesson 0002 quiz 5/6 (missed Q2: thought one loop serves two clients at once). Recall answer had the two loops right. Gaps: pictured `accept` as polling (it blocks) and `recv(1024)` as fixed-size envelopes (it returns whatever has arrived, up to 1024). server.py was correct except the name `server_forever`, so tests could not import `serve_forever`. Next: rename, go green, commit, then lesson 0003 (RESP parser).
+- 2026-11-23: learner green on lesson 0002 (renamed serve_forever, committed). Lesson 0003 shipped: RESP parse/encode as pure functions, 23 tests incl. every-byte partial cuts. Lesson 2 quiz recall gaps (accept blocks, recv is not fixed-size) are re-addressed in 0003 recall and the three-outcomes picture.

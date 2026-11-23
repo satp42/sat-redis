@@ -25,7 +25,7 @@ Real Redis executes commands on a single thread, in an event loop. That design p
 ## Roadmap
 
 - [x] 1. Understand Redis and its use cases (play with the real one)
-- [ ] 2. Sockets: a stdlib echo server
+- [x] 2. Sockets: a stdlib echo server
 - [ ] 3. RESP: a framing-aware parser, tested on partial reads
 - [ ] 4. `PING` / `ECHO` / `SET` / `GET`: real `redis-cli` connects
 - [ ] 5. Many clients with `asyncio`

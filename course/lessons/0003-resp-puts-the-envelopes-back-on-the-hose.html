@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 3: RESP puts the envelopes back on the hose</title>
+<link rel="stylesheet" href="../assets/course.css">
+<script src="../assets/quiz.js" defer></script>
+</head>
+<body>
+<main>
+
+<p class="kicker">sat-redis · Part II Talking over the network · Lesson 3 of about 15</p>
+<h1>RESP puts the envelopes back on the hose</h1>
+<p class="lede">Your win today: you catch the exact bytes <code>redis-cli</code> sends, then write the parser that turns them into a Python list like <code>[b"ECHO", b"hi"]</code>, even when they arrive in pieces. 23 new tests go green. No sockets today: just bytes in, values out.</p>
+
+<h2>Predict first</h2>
+
+<div class="quiz" data-answer="1">
+<p class="q">1. Bytes arrive as one long stream with no gaps. What is the most reliable way for the receiver to know where a message ends?</p>
+<button>Wait for a short pause in the data</button>
+<button>Sender states the length up front</button>
+<button>Trust each recv to be one message</button>
+<button>Make every message exactly 1 KB</button>
+<p class="why" hidden>Pauses depend on the network and lie. <code>recv</code> chunks are random, as lesson 2 showed. Fixed sizes waste space. Saying "the next 5 bytes are the message" always works, whatever is inside those bytes. RESP does exactly this for its data.</p>
+</div>
+
+<div class="quiz" data-answer="0">
+<p class="q">2. You split the incoming bytes at every <code>\r\n</code> to find messages. A user stores a value that itself contains <code>\r\n</code>. What goes wrong?</p>
+<button>The value is cut into two messages</button>
+<button>Nothing, \r\n is never in values</button>
+<button>Python raises a UnicodeDecodeError</button>
+<button>The value is stored but reversed</button>
+<p class="why" hidden>A separator only works if it can never appear inside the data. Users can store anything, including <code>\r\n</code> and raw image bytes, so RESP announces the length of each value instead of relying on a separator to end it.</p>
+</div>
+
+<h2>Where we are</h2>
+
+<figure>
+<svg viewBox="0 0 560 200" role="img" aria-label="The sat-redis layers with layer 2, Protocol, highlighted as today's work. Layer 1, Network, is done.">
+  <rect x="20" y="10" width="380" height="38" rx="4" class="box"/><text x="34" y="34" class="h">4 · The dictionary</text>
+  <rect x="20" y="56" width="380" height="38" rx="4" class="box"/><text x="34" y="80" class="h">3 · Commands</text>
+  <rect x="20" y="102" width="380" height="38" rx="4" class="boxa" style="stroke-width:2.5"/><text x="34" y="126" class="h">2 · Protocol (RESP)</text>
+  <rect x="20" y="148" width="380" height="38" rx="4" class="box"/><text x="34" y="172" class="h">1 · Network</text>
+  <text x="420" y="126" class="fill-acc">← today</text>
+  <text x="420" y="172" class="fill-good">✓ lesson 2</text>
+  <text x="420" y="80" class="s">lesson 4</text>
+</svg>
+<figcaption>Lesson 2 moves bytes. Today turns bytes into meaning. Lesson 4 joins the two and answers commands for real.</figcaption>
+</figure>
+
+<h2>The problem: a hose with no envelopes</h2>
+
+<p>Remember lesson 2: TCP is a hose. It delivers bytes in order, but it forgets where one message ended and the next began. Your echo server got away with that because it never needed to understand anything. A real server must know "this is one whole command, run it now". So the two sides agree on a way to <strong>draw the envelope lines back in</strong>. That agreement is called a <em>framing</em> rule, and there are only three basic ones:</p>
+
+<figure>
+<svg viewBox="0 0 560 210" role="img" aria-label="Three ways to mark message boundaries: a separator character, a length written first, or a fixed size for every message.">
+  <text x="10" y="22" class="h">1. Separator</text>
+  <rect x="140" y="8" width="120" height="24" rx="3" class="box"/><text x="200" y="25" text-anchor="middle">PING</text>
+  <rect x="262" y="8" width="26" height="24" rx="3" class="boxa"/><text x="275" y="25" text-anchor="middle">⏎</text>
+  <rect x="290" y="8" width="120" height="24" rx="3" class="box"/><text x="350" y="25" text-anchor="middle">GET k</text>
+  <rect x="412" y="8" width="26" height="24" rx="3" class="boxa"/><text x="425" y="25" text-anchor="middle">⏎</text>
+  <text x="140" y="50" class="s">easy to read by eye, but breaks if the data contains the separator</text>
+
+  <text x="10" y="92" class="h">2. Length first</text>
+  <rect x="140" y="78" width="26" height="24" rx="3" class="boxa"/><text x="153" y="95" text-anchor="middle">5</text>
+  <rect x="168" y="78" width="120" height="24" rx="3" class="box"/><text x="228" y="95" text-anchor="middle">hello</text>
+  <rect x="290" y="78" width="26" height="24" rx="3" class="boxa"/><text x="303" y="95" text-anchor="middle">4</text>
+  <rect x="318" y="78" width="120" height="24" rx="3" class="box"/><text x="378" y="95" text-anchor="middle">a⏎b!</text>
+  <text x="140" y="120" class="s">any bytes can go inside: "the next 4 bytes", whatever they are</text>
+
+  <text x="10" y="162" class="h">3. Fixed size</text>
+  <rect x="140" y="148" width="140" height="24" rx="3" class="box"/><text x="210" y="165" text-anchor="middle">PING········</text>
+  <rect x="282" y="148" width="140" height="24" rx="3" class="box"/><text x="352" y="165" text-anchor="middle">GET k·······</text>
+  <text x="140" y="190" class="s">simple, but wastes space and cannot hold anything bigger than the box</text>
+</svg>
+<figcaption>RESP uses the first two together. Short header lines end with the separator <code>\r\n</code>. Actual data travels "length first", so it can contain anything. The spec calls RESP "binary-safe" because it "uses prefixed length to transfer bulk data". <a class="cite" href="https://redis.io/docs/latest/develop/reference/protocol-spec/">[RESP spec]</a></figcaption>
+</figure>
+
+<h2>See it with your own eyes</h2>
+
+<p>Before reading any more spec, catch the real bytes. <code>nc -l</code> makes <code>nc</code> act as a fake server that prints whatever arrives, and <code>od -c</code> shows every byte, including the invisible ones.</p>
+
+<div class="step"><b>Catch redis-cli in the act.</b> In one terminal tab:
+<pre class="term-out"><span class="p">$</span> nc -l 6390 | od -c</pre>
+In a second tab:
+<pre class="term-out"><span class="p">$</span> redis-cli -p 6390 ECHO hi</pre>
+<code>redis-cli</code> will sit waiting for a reply that never comes. Press <code>Ctrl+C</code> in both tabs. The first tab shows:
+<pre class="term-out"><span class="c">0000000    *   2  \r  \n   $   4  \r  \n   E   C   H   O  \r  \n   $   2
+0000020   \r  \n   h   i  \r  \n</span></pre>
+That is the whole of what you typed, as 22 bytes. By the end of this lesson every one of them will make sense, and your code will turn them into <code>[b"ECHO", b"hi"]</code>.</div>
+
+<h2>Reading those 22 bytes</h2>
+
+<figure>
+<svg viewBox="0 0 560 190" role="img" aria-label="The bytes star 2, dollar 4 ECHO, dollar 2 hi, split into an array header and two bulk strings, each with a length line and data.">
+  <rect x="10" y="40" width="62" height="28" rx="3" class="boxa"/><text x="41" y="59" text-anchor="middle">*2\r\n</text>
+  <rect x="80" y="40" width="62" height="28" rx="3" class="box"/><text x="111" y="59" text-anchor="middle">$4\r\n</text>
+  <rect x="146" y="40" width="80" height="28" rx="3" class="box"/><text x="186" y="59" text-anchor="middle">ECHO\r\n</text>
+  <rect x="234" y="40" width="62" height="28" rx="3" class="box"/><text x="265" y="59" text-anchor="middle">$2\r\n</text>
+  <rect x="300" y="40" width="66" height="28" rx="3" class="box"/><text x="333" y="59" text-anchor="middle">hi\r\n</text>
+  <path d="M80 30 L80 22 L226 22 L226 30" class="line"/><text x="153" y="16" text-anchor="middle" class="s">item 1: a bulk string</text>
+  <path d="M234 30 L234 22 L366 22 L366 30" class="line"/><text x="300" y="16" text-anchor="middle" class="s">item 2: a bulk string</text>
+  <text x="41" y="90" text-anchor="middle" class="s">array of</text><text x="41" y="103" text-anchor="middle" class="s">2 items</text>
+  <text x="111" y="90" text-anchor="middle" class="s">4 bytes</text><text x="111" y="103" text-anchor="middle" class="s">follow</text>
+  <text x="186" y="90" text-anchor="middle" class="s">the data,</text><text x="186" y="103" text-anchor="middle" class="s">then \r\n</text>
+  <text x="265" y="90" text-anchor="middle" class="s">2 bytes</text><text x="265" y="103" text-anchor="middle" class="s">follow</text>
+  <text x="333" y="90" text-anchor="middle" class="s">the data,</text><text x="333" y="103" text-anchor="middle" class="s">then \r\n</text>
+  <path d="M10 130 L366 130" class="acc"/>
+  <text x="188" y="150" text-anchor="middle" class="fill-acc">parse → ([b"ECHO", b"hi"], 22)</text>
+  <text x="188" y="170" text-anchor="middle" class="s">the value, and how many bytes it used</text>
+  <text x="390" y="52" class="s">The first byte of every</text>
+  <text x="390" y="66" class="s">piece says its type:</text>
+  <text x="390" y="84" class="s">* array   $ bulk string</text>
+  <text x="390" y="98" class="s">+ simple  - error</text>
+  <text x="390" y="112" class="s">: integer</text>
+</svg>
+<figcaption>Every command is an array of bulk strings: "Clients send commands to a Redis server as an array of bulk strings." <a class="cite" href="https://redis.io/docs/latest/develop/reference/protocol-spec/">[RESP spec]</a> Replies coming back can be any of the five types.</figcaption>
+</figure>
+
+<div class="terms">
+<div class="term">
+<svg viewBox="0 0 200 80"><rect x="30" y="20" width="60" height="36" rx="4" class="box"/><text x="60" y="43" text-anchor="middle">\r</text><rect x="110" y="20" width="60" height="36" rx="4" class="box"/><text x="140" y="43" text-anchor="middle">\n</text><text x="100" y="74" text-anchor="middle" class="s">2 bytes: 13 and 10</text></svg>
+<b>CRLF, \r\n</b>
+<span class="plain">The "end of line" mark.</span> Two invisible bytes, carriage return then line feed, borrowed from typewriters. In RESP it "always separates its parts". <a class="cite" href="https://redis.io/docs/latest/develop/reference/protocol-spec/">[spec]</a>
+</div>
+<div class="term">
+<svg viewBox="0 0 200 80"><rect x="20" y="20" width="160" height="36" rx="4" class="boxa"/><text x="100" y="43" text-anchor="middle">*2…hi\r\n</text><text x="100" y="74" text-anchor="middle" class="s">one complete envelope</text></svg>
+<b>Frame</b>
+<span class="plain">One whole message, envelope and all.</span> A frame can contain other frames, as an array contains its items. Your parser's job is to cut exactly one frame off the front of the bytes.
+</div>
+<div class="term">
+<svg viewBox="0 0 200 80"><rect x="40" y="20" width="120" height="36" rx="4" class="box"/><text x="100" y="43" text-anchor="middle">+OK\r\n</text><text x="100" y="74" text-anchor="middle" class="s">→ "OK"</text></svg>
+<b>Simple string, +</b>
+<span class="plain">A short status word.</span> Text up to the <code>\r\n</code>. It "mustn't contain a CR or LF", which is why it needs no length. <a class="cite" href="https://redis.io/docs/latest/develop/reference/protocol-spec/#simple-strings">[spec]</a> In Python: <code>str</code>.
+</div>
+<div class="term">
+<svg viewBox="0 0 200 80"><rect x="20" y="20" width="160" height="36" rx="4" class="box" style="stroke:var(--bad)"/><text x="100" y="43" text-anchor="middle">-ERR oops\r\n</text><text x="100" y="74" text-anchor="middle" class="s">→ Error("ERR oops")</text></svg>
+<b>Error, -</b>
+<span class="plain">A simple string that means "that went wrong".</span> Shaped exactly like <code>+</code>, but a client must treat it as a failure. So in Python it gets its own type, <code>Error</code>.
+</div>
+<div class="term">
+<svg viewBox="0 0 200 80"><rect x="40" y="20" width="120" height="36" rx="4" class="box"/><text x="100" y="43" text-anchor="middle">:-7\r\n</text><text x="100" y="74" text-anchor="middle" class="s">→ -7</text></svg>
+<b>Integer, :</b>
+<span class="plain">A whole number written as digits.</span> May be negative. Python's <code>int()</code> happily reads bytes: <code>int(b"-7")</code> is <code>-7</code>.
+</div>
+<div class="term">
+<svg viewBox="0 0 200 80"><rect x="10" y="20" width="60" height="36" rx="4" class="boxa"/><text x="40" y="43" text-anchor="middle">$5\r\n</text><rect x="74" y="20" width="116" height="36" rx="4" class="box"/><text x="132" y="43" text-anchor="middle">hello\r\n</text><text x="100" y="74" text-anchor="middle" class="s">→ b"hello"</text></svg>
+<b>Bulk string, $</b>
+<span class="plain">Any bytes at all, length first.</span> The workhorse: keys, values and command names are all bulk strings. Python: <code>bytes</code>, never decoded, because a value might be an image.
+</div>
+<div class="term">
+<svg viewBox="0 0 200 80"><rect x="8" y="20" width="76" height="36" rx="4" class="box"/><text x="46" y="43" text-anchor="middle">$-1\r\n</text><rect x="94" y="20" width="98" height="36" rx="4" class="box"/><text x="143" y="43" text-anchor="middle">$0\r\n\r\n</text><text x="46" y="74" text-anchor="middle" class="s">None</text><text x="143" y="74" text-anchor="middle" class="s">b""</text></svg>
+<b>Null</b>
+<span class="plain">"There is nothing here."</span> Length -1. <code>GET</code> on a missing key replies with this. It is different from an empty string (length 0), and a client "should return a nil object" for it. <a class="cite" href="https://redis.io/docs/latest/develop/reference/protocol-spec/#null-bulk-strings">[spec]</a>
+</div>
+<div class="term">
+<svg viewBox="0 0 200 80"><rect x="10" y="20" width="44" height="36" rx="4" class="boxa"/><text x="32" y="43" text-anchor="middle">*3</text><rect x="58" y="20" width="40" height="36" rx="4" class="box"/><rect x="102" y="20" width="40" height="36" rx="4" class="box"/><rect x="146" y="20" width="40" height="36" rx="4" class="box"/><text x="100" y="74" text-anchor="middle" class="s">count, then that many frames</text></svg>
+<b>Array, *</b>
+<span class="plain">A count, then that many frames, back to back.</span> The items can be any type, including more arrays. Python: <code>list</code>.
+</div>
+</div>
+
+<h2>The three answers a parser can give</h2>
+
+<p>Here is the idea the whole lesson hangs on. When you hand the parser some bytes, there are exactly three possible situations, and mixing them up is the classic bug.</p>
+
+<figure>
+<svg viewBox="0 0 560 200" role="img" aria-label="Three outcomes: a complete frame returns the value and bytes used; a partial frame returns None meaning wait; garbage raises ProtocolError meaning hang up.">
+  <rect x="10" y="10" width="170" height="90" rx="6" class="box" style="stroke:var(--good)"/>
+  <text x="95" y="34" text-anchor="middle" class="h">Whole frame</text>
+  <text x="95" y="56" text-anchor="middle" class="s">+OK\r\n+PO…</text>
+  <text x="95" y="84" text-anchor="middle" class="fill-good">("OK", 5)</text>
+  <rect x="195" y="10" width="170" height="90" rx="6" class="box" style="stroke:var(--accent)"/>
+  <text x="280" y="34" text-anchor="middle" class="h">Part of a frame</text>
+  <text x="280" y="56" text-anchor="middle" class="s">$5\r\nhel</text>
+  <text x="280" y="84" text-anchor="middle" class="fill-acc">None</text>
+  <rect x="380" y="10" width="170" height="90" rx="6" class="box" style="stroke:var(--bad)"/>
+  <text x="465" y="34" text-anchor="middle" class="h">Garbage</text>
+  <text x="465" y="56" text-anchor="middle" class="s">?what\r\n</text>
+  <text x="465" y="84" text-anchor="middle" class="fill-bad">raise ProtocolError</text>
+  <text x="95" y="124" text-anchor="middle" class="s">use it, then drop</text><text x="95" y="138" text-anchor="middle" class="s">those 5 bytes</text>
+  <text x="280" y="124" text-anchor="middle" class="s">not wrong, just early:</text><text x="280" y="138" text-anchor="middle" class="s">recv more and try again</text>
+  <text x="465" y="124" text-anchor="middle" class="s">no amount of waiting</text><text x="465" y="138" text-anchor="middle" class="s">fixes it: hang up</text>
+  <text x="280" y="180" text-anchor="middle" class="s">The leftover "+PO…" is the start of the next frame. Never throw it away.</text>
+</svg>
+<figcaption>Tokio's mini-redis is built the same way: "If a partial frame is received, the data is buffered and more data is read from the socket." <a class="cite" href="https://tokio.rs/tokio/tutorial/framing">[Tokio tutorial, Framing]</a></figcaption>
+</figure>
+
+<p>Notice why <code>parse</code> returns a <em>pair</em> <code>(value, bytes_used)</code> instead of just the value. A null bulk string's value is <code>None</code>. If "not enough bytes yet" were <em>also</em> <code>None</code>, you could not tell them apart. With the pair, a null comes back as <code>(None, 5)</code> and "wait" comes back as plain <code>None</code>. The byte count also tells the caller exactly how much to cut off the front of its buffer.</p>
+
+<h2>The type map</h2>
+
+<table>
+<tr><th>RESP</th><th>On the wire</th><th>Python value</th></tr>
+<tr><td>simple string</td><td><code>+OK\r\n</code></td><td><code>"OK"</code> (<code>str</code>)</td></tr>
+<tr><td>error</td><td><code>-ERR oops\r\n</code></td><td><code>Error("ERR oops")</code></td></tr>
+<tr><td>integer</td><td><code>:42\r\n</code></td><td><code>42</code></td></tr>
+<tr><td>bulk string</td><td><code>$5\r\nhello\r\n</code></td><td><code>b"hello"</code> (<code>bytes</code>)</td></tr>
+<tr><td>null</td><td><code>$-1\r\n</code> or <code>*-1\r\n</code></td><td><code>None</code></td></tr>
+<tr><td>array</td><td><code>*2\r\n</code> + 2 frames</td><td><code>[…]</code> (<code>list</code>)</td></tr>
+</table>
+
+<p>The Python types carry the RESP type, so <code>encode</code> can go back the other way: a <code>str</code> becomes <code>+</code>, a <code>bytes</code> becomes <code>$</code>. Lesson 4 leans on that: replying <code>"PONG"</code> sends <code>+PONG\r\n</code>, and replying <code>b"Ada"</code> sends <code>$3\r\nAda\r\n</code>.</p>
+
+<h2>The spec</h2>
+
+<p>The tests are already in your repo at <code>tests/test_resp.py</code>. Run them first and watch them fail: <code>uv run pytest -v tests/test_resp.py</code>. Then create <code>sat_redis/resp.py</code> with exactly these four names:</p>
+
+<table>
+<tr><th>Name</th><th>What it must do</th></tr>
+<tr><td><code>Error</code></td><td>A class for error <em>replies</em>. Make it a subclass of <code>str</code>, so <code>Error("ERR x") == "ERR x"</code> but <code>isinstance(e, Error)</code> still tells it apart.</td></tr>
+<tr><td><code>ProtocolError</code></td><td>An <code>Exception</code> subclass, raised when the bytes are not valid RESP.</td></tr>
+<tr><td><code>parse(buf)</code></td><td>Given <code>bytes</code>, return <code>(value, bytes_used)</code> for the <em>first</em> frame, or <code>None</code> if the frame is not complete yet. Raise <code>ProtocolError</code> on garbage. Never change or eat the bytes after the frame.</td></tr>
+<tr><td><code>encode(value)</code></td><td>Turn a Python value back into RESP bytes, using the type map. Raise <code>TypeError</code> for anything else, such as a <code>float</code>.</td></tr>
+</table>
+
+<table>
+<tr><th>Tests</th><th>The lesson inside them</th></tr>
+<tr><td><code>simple_string</code> … <code>nested_array</code></td><td>One test per type. The nested one proves arrays can hold anything, arrays included.</td></tr>
+<tr><td><code>bulk_string_may_contain_crlf</code></td><td>The length decides where data ends, not the next <code>\r\n</code>. This test fails any parser that splits on separators.</td></tr>
+<tr><td><code>empty_bulk_string_is_not_null</code></td><td><code>b""</code> and <code>None</code> are different answers. <code>GET</code> on an empty value and <code>GET</code> on a missing key must look different.</td></tr>
+<tr><td><code>every_partial_frame_means_wait_for_more</code></td><td>The hose, tested properly: each frame is cut at <em>every</em> possible byte, the way <code>recv</code> might cut it, and each cut must return <code>None</code>. That covers 70 cases in about ten lines.</td></tr>
+<tr><td><code>leaves_the_next_frame_alone</code>, <code>back_to_back_frames…</code></td><td>The byte count lets the caller pull frames out of a buffer in a loop and keep the unfinished tail.</td></tr>
+<tr><td><code>…protocol_error</code> (3 tests)</td><td>Garbage is not "wait for more". An unknown type byte, a length that is not a number, a bulk string longer than promised.</td></tr>
+<tr><td><code>encode_each_type</code>, <code>round_trip</code></td><td>Whatever <code>encode</code> writes, <code>parse</code> must read back to the same value. Round trips catch bugs in either half.</td></tr>
+</table>
+
+<h2>Build it in five steps</h2>
+<p>Run just the step you are on with <code>-k</code>. Try each step before opening a hint, and open hints one rung at a time.</p>
+
+<div class="step"><b>Step A: <code>Error</code>, <code>ProtocolError</code>, <code>encode</code>.</b> Writing is easier than reading, so start there. Goal: <code>uv run pytest -v tests/test_resp.py -k encode</code> is green except <code>round_trip</code>, which needs <code>parse</code>.
+<details><summary>Hint 1: the shape</summary>One <code>if isinstance(...)</code> branch per row of the type map, each returning bytes. An array encodes its header, then <code>encode</code> of each item, joined. That is recursion, and it is fine: the items encode themselves.</details>
+<details><summary>Hint 2: the trap</summary><code>Error</code> is a subclass of <code>str</code>, so <code>isinstance(Error("x"), str)</code> is <code>True</code>. If the <code>str</code> check comes first, errors go out as <code>+ERR…</code>. Check the more specific type first. Also: <code>bytes</code> formatting works, <code>b"$%d\r\n" % 5</code> gives <code>b"$5\r\n"</code>.</details>
+</div>
+
+<div class="step"><b>Step B: the line types, <code>+ - :</code></b> Goal: <code>-k "simple or error_is or integers"</code> green.
+<details><summary>Hint 1: find the end of the line</summary><code>buf.find(b"\r\n")</code> gives the index of the first <code>\r\n</code>, or <code>-1</code> if there is none yet. No <code>\r\n</code> means the line is incomplete, so return <code>None</code>.</details>
+<details><summary>Hint 2: the type byte</summary>Careful: <code>buf[0]</code> on bytes gives an <em>int</em> (<code>43</code>), not <code>b"+"</code>. Use a slice, <code>buf[0:1]</code>, to compare against <code>b"+"</code>. The bytes used are "up to and including the <code>\r\n</code>", so the end index plus 2.</details>
+</div>
+
+<div class="step"><b>Step C: bulk strings and nulls.</b> Goal: <code>-k "bulk or null"</code> green.
+<details><summary>Hint 1: two reads</summary>First read the header line, as in step B, to get the length <code>n</code>. Then the data is the next <code>n</code> bytes, followed by <code>\r\n</code>. If the buffer is shorter than that, return <code>None</code>. Do not search for <code>\r\n</code> to find the end of the data. Count.</details>
+<details><summary>Hint 2: the edges</summary><code>n == -1</code> means null: return <code>(None, bytes_used)</code>. After the <code>n</code> data bytes, check that the next two bytes really are <code>\r\n</code>. If they are something else, the sender lied about the length: raise <code>ProtocolError</code>.</details>
+</div>
+
+<div class="step"><b>Step D: arrays, and the partial-frame test.</b> Goal: <code>-k "array or partial or frame"</code> green.
+<details><summary>Hint 1: where the trouble is</summary>An array's items start partway into the buffer, not at index 0. Slicing out <code>buf[pos:]</code> for each item works, but it copies the rest of the buffer every time. Instead, give your real parser a starting position: a helper <code>_parse_at(buf, pos)</code> that returns <code>(value, next_pos)</code> or <code>None</code>. Then <code>parse(buf)</code> is just <code>_parse_at(buf, 0)</code>, and <code>bytes.find(sub, start)</code> takes a start position too.</details>
+<details><summary>Hint 2: pseudocode for arrays</summary>
+<pre>read header line → count, pos
+if count == -1: return (None, pos)
+items = []
+repeat count times:
+    result = _parse_at(buf, pos)
+    if result is None: return None     # an item is incomplete, so the array is
+    value, pos = result
+    append value to items
+return (items, pos)</pre>
+If any single item is incomplete, the whole frame is. That one <code>return None</code> is what makes all 70 partial cuts pass.</details>
+</div>
+
+<div class="step"><b>Step E: garbage.</b> Goal: <code>uv run pytest -v</code> shows <code>30 passed, 1 xfailed</code> (the 7 echo tests still pass).
+<details><summary>Hint 1: two kinds of garbage</summary>A type byte that is not one of <code>+ - : $ *</code> should raise <code>ProtocolError</code>. And <code>int(b"abc")</code> raises <code>ValueError</code>: catch that and raise <code>ProtocolError</code> instead, so callers only ever deal with one error type for bad input. Put the conversion in a small helper so you write that <code>try</code> once.</details>
+</div>
+
+<h2>Try it live</h2>
+
+<div class="step"><b>Feed it the bytes you caught.</b> Open a Python prompt with your package available:
+<pre class="term-out"><span class="p">$</span> uv run python
+<span class="p">&gt;&gt;&gt;</span> from sat_redis.resp import parse, encode
+<span class="p">&gt;&gt;&gt;</span> parse(b"*2\r\n$4\r\nECHO\r\n$2\r\nhi\r\n")
+([b'ECHO', b'hi'], 22)
+<span class="p">&gt;&gt;&gt;</span> parse(b"*2\r\n$4\r\nEC")
+<span class="p">&gt;&gt;&gt;</span> encode([b"SET", b"user:42", b"Ada"])
+b'*3\r\n$3\r\nSET\r\n$7\r\nuser:42\r\n$3\r\nAda\r\n'</pre>
+The middle call printed nothing because it returned <code>None</code>: wait for more.</div>
+
+<div class="step"><b>Your win: speak to the real Redis with your own encoder.</b> Start the real server from lesson 1 (<code>redis-server</code> in its own tab), then send it bytes that <em>your</em> code wrote, and parse what comes back:
+<pre class="term-out"><span class="p">&gt;&gt;&gt;</span> import socket
+<span class="p">&gt;&gt;&gt;</span> s = socket.create_connection(("127.0.0.1", 6379))
+<span class="p">&gt;&gt;&gt;</span> s.sendall(encode([b"SET", b"greeting", b"hello"]))
+<span class="p">&gt;&gt;&gt;</span> parse(s.recv(1024))
+('OK', 5)
+<span class="p">&gt;&gt;&gt;</span> s.sendall(encode([b"GET", b"greeting"]) + encode([b"GET", b"nope"]))
+<span class="p">&gt;&gt;&gt;</span> parse(s.recv(1024))
+(b'hello', 11)</pre>
+Two commands went out in one send. Two replies came back in one <code>recv</code>, and <code>parse</code> took only the first. Exactly as the tests promised, the other bytes are still there: slice off the first 11 bytes of what <code>recv</code> returned (keep it in a variable this time) and <code>parse</code> the rest to get <code>(None, 5)</code>, the missing key. You just wrote a tiny Redis <em>client</em>. Lesson 4 turns it around into the server.</div>
+
+<div class="step"><b>Commit.</b>
+<pre class="term-out"><span class="p">$</span> git add sat_redis/resp.py
+<span class="p">$</span> git commit -m "RESP parser and encoder, tested on partial frames"
+<span class="p">$</span> git push</pre></div>
+
+<div class="senior">
+Four habits here. First, <strong>keep the protocol pure</strong>: <code>parse</code> and <code>encode</code> never touch a socket, so 23 tests run in milliseconds and none of them can fail because of the network. The socket code (lesson 2) and the protocol code (today) meet in exactly one place, next lesson. Second, <strong>test the hose by brute force</strong>: instead of guessing which splits are tricky, cut every frame at every byte. It costs a loop and finds the bugs you would never think to write a test for. Third, <strong>"not yet" and "never" are different answers</strong>: <code>None</code> means read more, <code>ProtocolError</code> means hang up. A parser that confuses them either hangs forever on garbage or drops honest clients on a slow network. Fourth, <strong>leave it crude on purpose</strong>: if a 100 MB value arrives in 1 KB chunks, this parser re-reads from the start on every chunk, which gets slow for huge frames. That is fine for now. Tokio's mini-redis has the same "check, then parse" shape. You will measure before you optimise, in lesson 13.
+</div>
+
+<h2>Check yourself</h2>
+
+<div class="quiz" data-answer="2">
+<p class="q">3. Why does a bulk string carry its length instead of just ending at <code>\r\n</code>?</p>
+<button>It makes the bytes smaller to send</button>
+<button>Redis needs the size for its memory</button>
+<button>The data may itself contain \r\n</button>
+<button>The \r\n is optional in RESP2</button>
+<p class="why" hidden>Values can be any bytes at all, including <code>\r\n</code> and images. A length lets the reader count past them. That is what "binary-safe" means.</p>
+</div>
+
+<div class="quiz" data-answer="1">
+<p class="q">4. <code>parse(b"$5\r\nhel")</code> should give back what?</p>
+<button>(b"hel", 7) with what arrived so far</button>
+<button>None: wait for the rest to arrive</button>
+<button>A ProtocolError: the length is wrong</button>
+<button>(None, 4) because it is a null</button>
+<p class="why" hidden>Nothing is wrong yet. Five bytes were promised and only three have arrived. The caller should <code>recv</code> more and try again with the bigger buffer.</p>
+</div>
+
+<div class="quiz" data-answer="3">
+<p class="q">5. What does <code>redis-cli</code> actually send when you type <code>GET user:42</code>?</p>
+<button>The text GET user:42 and a newline</button>
+<button>A simple string +GET user:42\r\n</button>
+<button>One bulk string with both words</button>
+<button>An array of two bulk strings</button>
+<p class="why" hidden><code>*2\r\n$3\r\nGET\r\n$7\r\nuser:42\r\n</code>. Every command is an array of bulk strings, one per word. You caught exactly this shape with <code>nc</code>.</p>
+</div>
+
+<div class="quiz" data-answer="0">
+<p class="q">6. Why does <code>parse</code> return <code>(value, bytes_used)</code> rather than just the value?</p>
+<button>So a null is not mistaken for "wait"</button>
+<button>So Python can type-check the result</button>
+<button>Because RESP frames are all one size</button>
+<button>So the parser can be run in a thread</button>
+<p class="why" hidden>A null's value is <code>None</code>, and "not enough bytes" is also <code>None</code>. Wrapping real results in a pair keeps them apart, and the count tells the caller how much of its buffer to cut off. That makes two good reasons for one small design choice.</p>
+</div>
+
+<div class="recall">
+<p class="q">7. Without scrolling up: explain the three things <code>parse</code> can do with a buffer, and what the <em>caller</em> should do after each.</p>
+<textarea placeholder="Type your answer, then open the model answer."></textarea>
+<details><summary>Model answer</summary>If the buffer starts with a whole frame, <code>parse</code> returns <code>(value, bytes_used)</code>: the caller handles the value, cuts that many bytes off the front, and tries again, because another frame may be waiting. If the buffer holds only part of a frame, it returns <code>None</code>: the caller keeps the bytes, calls <code>recv</code> for more, appends them, and tries again. If the bytes are not valid RESP, it raises <code>ProtocolError</code>: waiting will never fix that, so the caller should send an error and close the connection.</details>
+</div>
+
+<p id="score"></p>
+
+<hr>
+
+<h2>Read next</h2>
+<p><strong>Primary source:</strong> the <a href="https://redis.io/docs/latest/develop/reference/protocol-spec/">RESP protocol spec</a> on redis.io. Read "RESP protocol description", then the sections on simple strings, simple errors, integers, bulk strings and arrays, about 15 minutes. Skip the RESP3-only types (maps, sets, doubles) for now. Then skim Tokio's <a href="https://tokio.rs/tokio/tutorial/framing">Framing</a> chapter, ignoring the Rust syntax, and notice that their <code>check</code> then <code>parse</code> steps answer the same "is there a whole frame yet?" question your <code>None</code> does.</p>
+
+<p>Keep the <a href="../reference/resp-cheatsheet.html">RESP cheat sheet</a> open while you code.</p>
+
+<div class="ask">Stuck on a red test? Paste the pytest output to me (Claude) and I will give you the next hint rung, not the answer. When you are green, say so and I will run your tests and review <code>resp.py</code> like a pull request. Paste the quiz score line too.</div>
+
+<nav class="course"><a href="0002-a-server-is-a-loop-that-answers-the-phone.html">← Lesson 2: the echo server</a><span>Next: answering commands (lesson 4)</span></nav>
+
+</main>
+</body>
+</html>

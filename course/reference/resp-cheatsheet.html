@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RESP cheat sheet</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<main>
+<p class="kicker">sat-redis · Reference</p>
+<h1>RESP cheat sheet</h1>
+<p class="lede">The RESP2 wire format sat-redis speaks, the Python value each type becomes, and the rules a parser must not break.</p>
+
+<h2>The five types</h2>
+<table>
+<tr><th>First byte</th><th>Type</th><th>Example</th><th>Python</th></tr>
+<tr><td><code>+</code></td><td>simple string</td><td><code>+OK\r\n</code></td><td><code>"OK"</code></td></tr>
+<tr><td><code>-</code></td><td>error</td><td><code>-ERR unknown command\r\n</code></td><td><code>Error("ERR unknown command")</code></td></tr>
+<tr><td><code>:</code></td><td>integer</td><td><code>:1000\r\n</code></td><td><code>1000</code></td></tr>
+<tr><td><code>$</code></td><td>bulk string</td><td><code>$5\r\nhello\r\n</code></td><td><code>b"hello"</code></td></tr>
+<tr><td><code>$</code></td><td>null bulk</td><td><code>$-1\r\n</code></td><td><code>None</code></td></tr>
+<tr><td><code>*</code></td><td>array</td><td><code>*2\r\n:1\r\n:2\r\n</code></td><td><code>[1, 2]</code></td></tr>
+<tr><td><code>*</code></td><td>null array</td><td><code>*-1\r\n</code></td><td><code>None</code></td></tr>
+</table>
+
+<h2>Commands vs replies</h2>
+<table>
+<tr><th>Direction</th><th>Shape</th><th>Example</th></tr>
+<tr><td>client → server</td><td>always an array of bulk strings</td><td><code>GET user:42</code> → <code>*2\r\n$3\r\nGET\r\n$7\r\nuser:42\r\n</code></td></tr>
+<tr><td>server → client</td><td>any type</td><td><code>PING</code> → <code>+PONG\r\n</code>, <code>GET missing</code> → <code>$-1\r\n</code>, <code>INCR n</code> → <code>:1\r\n</code></td></tr>
+</table>
+
+<h2>Parser rules</h2>
+<table>
+<tr><th>Rule</th><th>Why</th></tr>
+<tr><td>Bulk data ends where the length says, not at <code>\r\n</code></td><td>Values may contain <code>\r\n</code> or any byte (binary-safe)</td></tr>
+<tr><td>Incomplete → <code>None</code>, never an error</td><td><code>recv</code> may stop anywhere inside a frame</td></tr>
+<tr><td>Garbage → <code>ProtocolError</code></td><td>Waiting will not fix it: reply with an error and close</td></tr>
+<tr><td>Return the bytes used, leave the rest</td><td>The next frame may already be in the buffer (pipelining)</td></tr>
+<tr><td><code>$0\r\n\r\n</code> is <code>b""</code>, <code>$-1\r\n</code> is <code>None</code></td><td>An empty value and a missing key must look different</td></tr>
+</table>
+
+<h2>Python byte traps</h2>
+<table>
+<tr><th>Code</th><th>Gives</th></tr>
+<tr><td><code>b"+OK"[0]</code></td><td><code>43</code> (an int). Use <code>buf[0:1]</code> to get <code>b"+"</code>.</td></tr>
+<tr><td><code>int(b"-7")</code></td><td><code>-7</code>. <code>int(b"abc")</code> raises <code>ValueError</code>.</td></tr>
+<tr><td><code>buf.find(b"\r\n", pos)</code></td><td>The index of the next CRLF at or after <code>pos</code>, or <code>-1</code></td></tr>
+<tr><td><code>b"$%d\r\n" % 5</code></td><td><code>b"$5\r\n"</code></td></tr>
+<tr><td><code>isinstance(Error("x"), str)</code></td><td><code>True</code>, so check <code>Error</code> before <code>str</code></td></tr>
+</table>
+
+<h2>See the bytes</h2>
+<table>
+<tr><th>Command</th><th>Shows</th></tr>
+<tr><td><code>nc -l 6390 | od -c</code> then <code>redis-cli -p 6390 ECHO hi</code></td><td>Exactly what redis-cli sends</td></tr>
+<tr><td><code>printf '*1\r\n$4\r\nPING\r\n' | nc -w1 localhost 6379 | od -c</code></td><td>Exactly what real Redis replies</td></tr>
+</table>
+<p>Source: <a href="https://redis.io/docs/latest/develop/reference/protocol-spec/">RESP protocol spec</a>.</p>
+
+<nav class="course"><a href="../lessons/0003-resp-puts-the-envelopes-back-on-the-hose.html">← Lesson 3</a><span></span></nav>
+</main>
+</body>
+</html>
