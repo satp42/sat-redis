@@ -11,7 +11,7 @@ def handle(conn):
     while data := conn.recv(1024):
         conn.sendall(data)
 
-def server_forever(server):
+def serve_forever(server):
     while True:
         conn, addr = server.accept()
         try:

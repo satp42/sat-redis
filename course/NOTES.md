@@ -35,3 +35,4 @@
 
 ## Progress
 - 2026-11-19: learner reports lesson 0001 done. Score line not pasted yet. Lesson 0002 shipped.
+- 2026-11-20: lesson 0002 quiz 5/6 (missed Q2: thought one loop serves two clients at once). Recall answer had the two loops right. Gaps: pictured `accept` as polling (it blocks) and `recv(1024)` as fixed-size envelopes (it returns whatever has arrived, up to 1024). server.py was correct except the name `server_forever`, so tests could not import `serve_forever`. Next: rename, go green, commit, then lesson 0003 (RESP parser).
